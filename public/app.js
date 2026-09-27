@@ -17,7 +17,9 @@ const SHUFFLES = [
 ];
 const DEFAULT_ROSTER = ['quick', 'merge', 'heap', 'shell', 'radix', 'bubble'];
 const RENDER_W = 520;
-const MAX_SPEED = 20000;
+const MAX_SPEED = 20000; // raised automatically for huge grids
+const MAX_SIDE = 2000;
+const PIXEL_MODE = 20000; // above this many pieces, redraw with raw pixels instead of drawImage
 const MEME_CAP = 3_000_000; // ops a meme fighter gets in Finish mode before its DNF
 const RECENT = 6; // how many recent ops get highlighted per fighter
 const PLACES = ['🥇', '🥈', '🥉'];
@@ -73,7 +75,11 @@ const state = {
   source: null, // canvas holding the image at render size
   W: RENDER_W,
   H: 390,
-  grid: GRIDS.find((g) => g.id === saved.grid) ?? GRIDS[3],
+  grid: saved.grid === 'custom' && saved.custom
+    ? { id: 'custom', rows: saved.custom.rows, cols: saved.custom.cols }
+    : GRIDS.find((g) => g.id === saved.grid) ?? GRIDS[3],
+  img: null, // { img, w, h } the original image
+  px: null, // pixel-mode lookup tables for huge grids
   shuffle: SHUFFLES.some((s) => s.id === saved.shuffle) ? saved.shuffle : 'random',
   seed: newSeed(),
   selected: new Set(Array.isArray(saved.roster) ? saved.roster : DEFAULT_ROSTER),
@@ -105,6 +111,7 @@ function savePrefs() {
   try {
     localStorage.setItem('sort-arena', JSON.stringify({
       grid: state.grid.id,
+      custom: state.grid.id === 'custom' ? { rows: state.grid.rows, cols: state.grid.cols } : null,
       shuffle: state.shuffle,
       roster: [...state.selected],
       speed: Number(el.speed.value),
@@ -121,7 +128,8 @@ function newSeed() {
 
 function opsPerFrame() {
   const t = Number(el.speed.value) / 100;
-  return Math.max(1, Math.round(MAX_SPEED ** t));
+  const max = Math.max(MAX_SPEED, state.grid.rows * state.grid.cols * 2);
+  return Math.max(1, Math.round(max ** t));
 }
 
 // ---------------------------------------------------------------- sample images
@@ -296,10 +304,16 @@ function drawBlocks(ctx, w, h) {
 // ---------------------------------------------------------------- image input
 
 function useImage(img, w, h) {
-  w = w || 800;
-  h = h || 600;
+  state.img = { img, w: w || 800, h: h || 600 };
+  rebuild();
+}
+
+// Render the image big enough that every piece gets at least one pixel.
+function buildSource() {
+  const { img, w, h } = state.img;
+  const { rows, cols } = state.grid;
   const aspect = Math.min(1.8, Math.max(0.6, w / h));
-  const W = RENDER_W;
+  const W = Math.max(RENDER_W, cols, Math.ceil(rows * aspect));
   const H = Math.round(W / aspect);
   const c = document.createElement('canvas');
   c.width = W;
@@ -315,7 +329,21 @@ function useImage(img, w, h) {
   el.preview.width = W;
   el.preview.height = H;
   el.preview.getContext('2d').drawImage(c, 0, 0);
-  rebuild();
+}
+
+function buildPixelTables() {
+  const { W, H, rects: R } = state;
+  const { rows, cols } = state.grid;
+  if (rows * cols <= PIXEL_MODE) {
+    state.px = null;
+    return;
+  }
+  const colOf = new Int32Array(W);
+  const rowOf = new Int32Array(H);
+  for (let c = 0; c < cols; c++) for (let x = R.x[c]; x < R.x[c] + R.w[c]; x++) colOf[x] = c;
+  for (let r = 0; r < rows; r++) for (let y = R.y[r * cols]; y < R.y[r * cols] + R.h[r * cols]; y++) rowOf[y] = r;
+  const src = new Uint32Array(state.source.getContext('2d').getImageData(0, 0, W, H).data.buffer);
+  state.px = { colOf, rowOf, src };
 }
 
 function useSample(id) {
@@ -395,7 +423,7 @@ function computeRects() {
   const { rows, cols } = state.grid;
   const { W, H } = state;
   const n = rows * cols;
-  const R = { x: new Int16Array(n), y: new Int16Array(n), w: new Int16Array(n), h: new Int16Array(n) };
+  const R = { x: new Int32Array(n), y: new Int32Array(n), w: new Int32Array(n), h: new Int32Array(n) };
   for (let r = 0; r < rows; r++) {
     const y0 = Math.floor((r * H) / rows);
     const y1 = Math.floor(((r + 1) * H) / rows);
@@ -414,9 +442,12 @@ function computeRects() {
 
 // Rebuild everything: pieces, scramble and fighter cards.
 function rebuild() {
-  if (!state.source) return;
+  if (!state.img) return;
   stopRace();
+  buildSource();
   state.rects = computeRects();
+  buildPixelTables();
+  updateSpeedLabel();
   state.initial = makeInput(state.grid.rows * state.grid.cols, state.shuffle, state.seed);
 
   el.fighters.textContent = '';
@@ -472,11 +503,15 @@ function createFighter(algo) {
   img.height = fx.height = state.H;
 
   const stat = (k) => card.querySelector(`[data-k="${k}"]`);
+  const ctx = img.getContext('2d');
+  const imageData = state.px ? ctx.createImageData(state.W, state.H) : null;
   return {
     algo,
     card,
     lane,
-    ctx: img.getContext('2d'),
+    ctx,
+    imageData,
+    pixels: imageData && new Uint32Array(imageData.data.buffer),
     fx: fx.getContext('2d'),
     ui: {
       cmp: stat('cmp'),
@@ -509,8 +544,31 @@ function resetFighter(f) {
   f.ui.place.textContent = '—';
   f.ui.stamp.textContent = '';
   f.fx.clearRect(0, 0, state.W, state.H);
-  for (let i = 0; i < n; i++) drawTile(f, i);
+  redrawAll(f);
   renderStats(f);
+}
+
+function redrawAll(f) {
+  if (!state.px) {
+    for (let i = 0; i < f.a.length; i++) drawTile(f, i);
+    return;
+  }
+  const { W, H, rects: R } = state;
+  const { colOf, rowOf, src } = state.px;
+  const cols = state.grid.cols;
+  const { a, pixels } = f;
+  for (let y = 0; y < H; y++) {
+    const rowBase = rowOf[y] * cols;
+    const oy = y - R.y[rowBase];
+    for (let x = 0; x < W; x++) {
+      const i = rowBase + colOf[x];
+      const v = a[i];
+      const sx = R.x[v] + Math.min(x - R.x[i], R.w[v] - 1);
+      const sy = R.y[v] + Math.min(oy, R.h[v] - 1);
+      pixels[y * W + x] = src[sy * W + sx];
+    }
+  }
+  f.ctx.putImageData(f.imageData, 0, 0);
 }
 
 // ---------------------------------------------------------------- rendering
@@ -529,9 +587,14 @@ function markDirty(f, i) {
 }
 
 function render(f) {
-  for (const i of f.dirtyList) {
-    drawTile(f, i);
-    f.dirty[i] = 0;
+  if (state.px && f.dirtyList.length > 2000) {
+    for (const i of f.dirtyList) f.dirty[i] = 0;
+    redrawAll(f);
+  } else {
+    for (const i of f.dirtyList) {
+      drawTile(f, i);
+      f.dirty[i] = 0;
+    }
   }
   f.dirtyList.length = 0;
 
@@ -1031,6 +1094,32 @@ function wire() {
     rebuild();
   });
   el.reshuffleBtn.addEventListener('click', newScramble);
+
+  const customCols = $('#customCols');
+  const customRows = $('#customRows');
+  if (state.grid.id === 'custom') {
+    customCols.value = state.grid.cols;
+    customRows.value = state.grid.rows;
+  }
+  const side = (input) => Math.min(MAX_SIDE, Math.max(1, Math.round(Number(input.value)) || 1));
+  const applyCustom = () => {
+    const cols = side(customCols);
+    const rows = side(customRows);
+    customCols.value = cols;
+    customRows.value = rows;
+    state.grid = { id: 'custom', rows, cols };
+    for (const b of el.gridSeg.children) b.setAttribute('aria-pressed', 'false');
+    savePrefs();
+    rebuild();
+    toast(`${full.format(rows * cols)} pieces 🔒`);
+  };
+  $('#customBtn').addEventListener('click', applyCustom);
+  for (const input of [customCols, customRows]) {
+    input.addEventListener('keydown', (e) => {
+      e.stopPropagation(); // don't trigger the R/N/F shortcuts while typing
+      if (e.key === 'Enter') applyCustom();
+    });
+  }
 
   el.speed.addEventListener('input', () => {
     updateSpeedLabel();

@@ -328,6 +328,19 @@ h2 b { color: var(--lime); margin-right: 6px; }
 
 .seg-3 { grid-template-columns: repeat(3, 1fr); }
 
+.custom-grid { display: flex; align-items: center; gap: 6px; margin-top: 6px; color: var(--muted); }
+.custom-grid input {
+  width: 0;
+  flex: 1;
+  padding: 7px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--line-2);
+  background: #07080d;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
 .seg button {
   padding: 7px 4px;
   border: 0;

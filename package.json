@@ -1,0 +1,17 @@
+{
+  "name": "sort-arena",
+  "version": "1.0.0",
+  "description": "Upload an image, scramble it, and watch sorting algorithms race to put it back together.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node server.js --open",
+    "dev": "node server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": ["sorting", "algorithms", "visualization", "quicksort", "mergesort", "canvas"],
+  "license": "MIT"
+}

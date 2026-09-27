@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sort Arena</title>
+  <meta name="description" content="Upload an image, scramble it, and watch sorting algorithms race to put it back together.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔒</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;800&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">🔒</span>
+      <div>
+        <h1>SORT<span>//</span>ARENA</h1>
+        <p>lock in. pick your fighters. unscramble the image.</p>
+      </div>
+    </div>
+    <div class="top-actions">
+      <span id="phaseChip" class="phase-chip">READY</span>
+      <button id="soundBtn" class="icon-btn" aria-pressed="false" title="Sound (M)">🔇</button>
+      <button id="helpBtn" class="icon-btn" title="How it works (?)">?</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="panel controls">
+      <section>
+        <h2><b>01</b> Image</h2>
+        <button id="dropzone" class="dropzone" title="Click to upload, or drop / paste an image">
+          <canvas id="preview" width="520" height="390"></canvas>
+          <span class="dz-hint">drop · paste · click</span>
+        </button>
+        <input id="fileInput" type="file" accept="image/*" hidden>
+        <div class="row">
+          <button id="uploadBtn" class="btn">📁 Upload</button>
+          <button id="webcamBtn" class="btn">📸 Webcam</button>
+        </div>
+        <div id="samples" class="samples" aria-label="Sample images"></div>
+      </section>
+
+      <section>
+        <h2><b>02</b> Arena</h2>
+        <span class="field-label">Pieces</span>
+        <div id="gridSeg" class="seg seg-3"></div>
+        <span class="field-label">Scramble</span>
+        <div id="shuffleSeg" class="seg seg-3"></div>
+        <button id="reshuffleBtn" class="btn ghost full">🎲 New scramble</button>
+      </section>
+
+      <section>
+        <h2><b>03</b> Speed</h2>
+        <input id="speed" type="range" min="0" max="100" value="38" aria-label="Operations per frame">
+        <div class="speed-readout"><b id="speedLabel">40</b> ops / frame / fighter</div>
+      </section>
+
+      <section class="go">
+        <button id="startBtn" class="btn primary big">LOCK IN 🔒</button>
+        <div class="row row-3">
+          <button id="pauseBtn" class="btn" disabled>⏸ Pause</button>
+          <button id="skipBtn" class="btn">⏭ Finish</button>
+          <button id="resetBtn" class="btn">↺ Reset</button>
+        </div>
+        <p class="kbd-hints"><kbd>Space</kbd> go/pause · <kbd>F</kbd> finish · <kbd>R</kbd> reset · <kbd>N</kbd> new scramble</p>
+      </section>
+    </aside>
+
+    <section class="arena">
+      <div class="panel roster-wrap">
+        <div class="section-head">
+          <h2><b>04</b> Fighters</h2>
+          <span id="rosterCount" class="muted"></span>
+        </div>
+        <div id="roster" class="roster"></div>
+      </div>
+
+      <div class="panel track-wrap">
+        <div class="section-head">
+          <h2><b>05</b> Live standings</h2>
+          <span class="muted">position = % of pieces home</span>
+        </div>
+        <div id="track" class="track"></div>
+      </div>
+
+      <div id="fighters" class="fighters"></div>
+    </section>
+  </main>
+
+  <div id="countdown" class="countdown" hidden><span></span></div>
+  <div id="dropOverlay" class="drop-overlay" hidden><span>drop it 🔥</span></div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <canvas id="confetti" class="confetti" aria-hidden="true"></canvas>
+
+  <dialog id="resultsDlg" class="dlg">
+    <form method="dialog">
+      <p class="eyebrow">Final results</p>
+      <h2 id="resultsTitle"></h2>
+      <p id="resultsSub" class="muted"></p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>#</th><th>Fighter</th><th>Compares</th><th>Writes</th><th>Total ops</th><th title="Real CPU time with no visuals, averaged over several runs">Headless ms</th></tr>
+          </thead>
+          <tbody id="resultsBody"></tbody>
+        </table>
+      </div>
+      <div class="dlg-actions">
+        <button value="close" class="btn">Close</button>
+        <button value="scramble" class="btn">🎲 New scramble</button>
+        <button value="rematch" class="btn primary">Rematch 🔒</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="webcamDlg" class="dlg">
+    <form method="dialog">
+      <p class="eyebrow">Webcam</p>
+      <h2>Strike a pose</h2>
+      <video id="webcamVideo" autoplay playsinline muted></video>
+      <p id="webcamError" class="muted" hidden></p>
+      <div class="dlg-actions">
+        <button value="cancel" class="btn">Cancel</button>
+        <button id="snapBtn" value="snap" class="btn primary">📸 Snap</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="helpDlg" class="dlg">
+    <form method="dialog">
+      <p class="eyebrow">How it works</p>
+      <h2>It's a fair fight</h2>
+      <ol class="help">
+        <li>Your image is cut into pieces. Each piece remembers its <b>home position</b>.</li>
+        <li>The pieces are scrambled once, and every fighter gets the <b>exact same scramble</b>.</li>
+        <li>Each frame, every fighter gets the same budget of <b>operations</b>: one compare, one read, one swap or one write each.</li>
+        <li>Whoever puts every piece home in the fewest operations wins. The <b>Headless ms</b> column in the results is real CPU time with the visuals turned off.</li>
+      </ol>
+      <p class="muted">Try <b>Nearly sorted</b> to watch Insertion Sort go from zero to hero, or <b>Reversed</b> to see who panics.</p>
+      <div class="dlg-actions"><button value="close" class="btn primary">Let's go</button></div>
+    </form>
+  </dialog>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
